@@ -1,89 +1,75 @@
-import socket
+import os
 import time
+
 import cv2
-import numpy as np
+from pwn import *
 from pyzbar.pyzbar import decode
-from PIL import Image
-
-BUFFER_SIZE = 10000
-WAIT_INTERVAL = 0.5
+from PIL import ImageGrab, Image  # Use Pillow for taking screenshots
 
 
-def main():
-    host = "62.173.140.174"
-    port = 10006
+# Function to read a QR code from an image file
+def read_qr_code(filename):
+    try:
+        img = Image.open(filename)
+        gray_image = img.convert('L')
+        binary = gray_image.point(lambda x: 0 if x < 128 else 255, '1')
+        binary.save('temp.png', format='PNG')
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.connect((host, port))
-            print("Connected to server")
-            response = s.recv(1024).decode()
-            print(response)
-            s.send(b"start\n")
-            response = s.recv(1024).decode()
-            print(response)
+        image = cv2.imread('temp.png')
+        barcodes = decode(image)
 
-            while True:
-                time.sleep(WAIT_INTERVAL)
-                buffer = s.recv(BUFFER_SIZE)
-                qr_data = buffer.decode()
-                print(qr_data)
-                with open('qr.png', 'w') as file:
-                    save_qr(buffer, 'qr.png')
-                    decoded = decode_qr('qr.png')
-                    s.send(decoded.encode() + b"\n")
-        except Exception as e:
-            print(f"Error: {e}")
+        if barcodes:
+            return barcodes[0].data.decode()
+        else:
+            return None
+
+    except Exception as e:
+        return None
 
 
-def save_qr(buffer, file_path):
-    qr_ascii = cut_qr(buffer)
-    bitmap = get_bitmap(qr_ascii)
-    img = create_img(bitmap)
-    save_img(img, file_path)
+context(arch='i386', os='linux')
 
+ip = '62.173.140.174'
+port = 10006
 
-def cut_qr(buffer):
-    qr_str = buffer.decode()
-    str_list = qr_str.split("\n")
-    ascii_qr_strs = [s for s in str_list if "[" in s]
-    return ascii_qr_strs
+# Connect to the remote server with error handling
+try:
+    r = remote(ip, port)
+except Exception as e:
+    print("Error connecting to the server:", str(e))
+    exit()
 
+# Send the "start" command to the server
+r.sendline(b'start')
 
-def get_bitmap(ascii_qr_strs):
-    bitmap = []
-    for line in ascii_qr_strs:
-        pixels = line.split("  ")
-        pixels = pixels[:-1]
-        row = [True if "[42m" in pixel else False for pixel in pixels]
-        bitmap.append(row)
-    return bitmap
+# Loop to process QR codes
+try:
+    for i in range(0, 50):
+        data = r.recvuntil(b'/50) ', timeout=5)  # Adjust the timeout as needed
+        if not data:
+            print("Connection closed unexpectedly.")
+            break
 
+        print(data.decode())
 
-def create_img(bitmap):
-    img = np.zeros((len(bitmap), len(bitmap[0]), 3), dtype=np.uint8)
-    for y, row in enumerate(bitmap):
-        for x, val in enumerate(row):
-            if val:
-                img[y, x] = [0, 0, 0]  # Black
-            else:
-                img[y, x] = [255, 255, 255]  # White
-    return img
+        time.sleep(1)
 
+        # Take a screenshot using Pillow and save it
+        screenshot = ImageGrab.grab()
+        screenshot.save("qr.png")
 
-def save_img(img, file_path):
-    img_pil = Image.fromarray(img)
-    img_pil.save(file_path, "png")
-    print("Image saved")
+        # Read the QR code from the screenshot
+        qr_code_data = read_qr_code("qr.png")
 
+        if qr_code_data:
+            print("QR Code Data:", qr_code_data)
+            r.sendline(qr_code_data.encode())
+        else:
+            print("No QR code detected in the screenshot.")
+            r.sendline(b'')  # Send an empty line if no QR code is detected
 
-def decode_qr(file_path):
-    img = cv2.imread(file_path)
-    decoded_objects = decode(img)
-    if decoded_objects:
-        return decoded_objects[0].data.decode()
-    return ""
+except EOFError:
+    print("Connection closed unexpectedly.")
 
-
-if __name__ == "__main__":
-    main()
+# Close the connection
+r.close()

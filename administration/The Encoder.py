@@ -11,16 +11,14 @@ def main():
         s.connect((host, port))
         print("Connected to", host, "on port", port)
 
-        response = s.recv(1024)
-
         s.sendall(b"start\n")
-
-        response = s.recv(1024)
 
         while True:
             time.sleep(0.5)
             response = s.recv(10000)
-            text = response.decode().strip()
+            text = response.decode().strip().split()[-2]
+            if text == "FLAG:":
+                text = response.decode().strip().split()[-1]
             print("Received Text:", text)
 
             encoded_text = base64.b32encode(text.encode()).decode()
